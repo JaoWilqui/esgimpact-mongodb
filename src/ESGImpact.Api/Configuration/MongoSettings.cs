@@ -12,6 +12,18 @@ public class MongoSettings
 
     public string Database { get; set; } = "esgimpact";
 
+    /// <summary>
+    /// Usuário e senha opcionais. Quando informados, sobrescrevem as
+    /// credenciais da connection string — evita ter de codificar
+    /// caracteres especiais da senha (como @) dentro da URL.
+    /// </summary>
+    public string? Username { get; set; }
+
+    public string? Password { get; set; }
+
+    /// <summary>Banco de autenticação (padrão: admin).</summary>
+    public string AuthenticationSource { get; set; } = "admin";
+
     /// <summary>Nomes das 5 collections do domínio ESG.</summary>
     public static class Collections
     {

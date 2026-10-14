@@ -1,23 +1,53 @@
 # =====================================================================
-# ESGImpact / MongoDB — infraestrutura completa em containers
+# ESGImpact — ambiente LOCAL de desenvolvimento
 # ---------------------------------------------------------------------
-#   docker compose up -d                  -> MongoDB + Mongo Express
-#   docker compose --profile api up -d    -> sobe também a API .NET 8
-#   docker compose logs -f esgimpact-mongo
-#   docker compose down                   -> para (mantém os dados)
-#   docker compose down -v                -> para e APAGA o volume
+#   docker compose up -d --build   -> API + MongoDB + Mongo Express
+#   docker compose ps
+#   docker compose logs -f api
+#   docker compose down            -> para (mantém os dados)
+#   docker compose down -v         -> para e APAGA os volumes
 #
-# Mongo Express (interface web): http://localhost:8081   (admin / esgadmin)
-# Swagger da API (perfil `api`):  http://localhost:8080/swagger
+#   API / Swagger : http://localhost:8080/swagger
+#   Mongo Express : http://localhost:8081   (admin / esgadmin)
+#
+# Staging e produção usam deploy/docker-compose.deploy.yml, acionado
+# pelo pipeline de CI/CD (ver README).
 # =====================================================================
 
 services:
   # -------------------------------------------------------------------
-  # Banco de dados — MongoDB 7.0
-  # Os scripts de mongo/init são executados automaticamente na PRIMEIRA
-  # inicialização (volume vazio), em ordem alfabética.
+  # API .NET 8 — construída a partir do Dockerfile da raiz
   # -------------------------------------------------------------------
-  esgimpact-mongo:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_VERSION: dev
+        GIT_SHA: local
+    image: esgimpact-api:dev
+    container_name: esgimpact-api
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      MongoDb__ConnectionString: mongodb://mongo:27017
+      MongoDb__Database: ${MONGO_DATABASE:-esgimpact}
+      MongoDb__Username: ${MONGO_ROOT_USER:-esgadmin}
+      MongoDb__Password: ${MONGO_ROOT_PASSWORD:-Esg@Mongo2026}
+      Jwt__Key: ${JWT_KEY:-esg-impact-super-secret-signing-key-change-me-2026!!}
+    ports:
+      - "${API_PORT:-8080}:8080"
+    networks:
+      - backend
+
+  # -------------------------------------------------------------------
+  # MongoDB 7.0 — scripts de mongo/init rodam na PRIMEIRA subida
+  # (volume vazio), criando as collections, os índices e a carga.
+  # -------------------------------------------------------------------
+  mongo:
     image: mongo:7.0
     container_name: esgimpact-mongo
     restart: unless-stopped
@@ -28,77 +58,48 @@ services:
     ports:
       - "${MONGO_PORT:-27017}:27017"
     volumes:
-      - esgimpact-mongo-data:/data/db
-      - esgimpact-mongo-config:/data/configdb
-      # carga automática na PRIMEIRA subida (volume vazio)
+      - mongo-data:/data/db
+      - mongo-config:/data/configdb
       - ./mongo/init:/docker-entrypoint-initdb.d:ro
-      # os mesmos scripts, executáveis sob demanda a qualquer momento
       - ./mongo/init:/scripts/init:ro
       - ./mongo/crud:/scripts/crud:ro
     networks:
-      - esgimpact-net
+      - backend
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      # conecta pelo hostname (e nao por localhost): durante a carga inicial o
+      # mongod temporario so escuta em 127.0.0.1, entao o banco so fica
+      # "healthy" depois que todos os scripts de mongo/init terminaram.
+      test: ["CMD-SHELL", "mongosh --quiet --host \"$$(hostname)\" --eval \"db.adminCommand('ping').ok\""]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 20s
 
   # -------------------------------------------------------------------
-  # Interface web para inspecionar as collections (prints da entrega)
+  # Interface web do banco (somente no ambiente local)
   # -------------------------------------------------------------------
-  esgimpact-mongo-express:
+  mongo-express:
     image: mongo-express:1.0.2
     container_name: esgimpact-mongo-express
     restart: unless-stopped
     depends_on:
-      esgimpact-mongo:
+      mongo:
         condition: service_healthy
     environment:
-      ME_CONFIG_MONGODB_URL: mongodb://${MONGO_ROOT_USER:-esgadmin}:${MONGO_ROOT_PASSWORD:-Esg@Mongo2026}@esgimpact-mongo:27017/?authSource=admin
-      ME_CONFIG_MONGODB_ENABLE_ADMIN: "true"
+      ME_CONFIG_MONGODB_SERVER: mongo
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_ROOT_USER:-esgadmin}
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_ROOT_PASSWORD:-Esg@Mongo2026}
       ME_CONFIG_BASICAUTH_USERNAME: ${ME_USER:-admin}
       ME_CONFIG_BASICAUTH_PASSWORD: ${ME_PASSWORD:-esgadmin}
-      ME_CONFIG_SITE_BASEURL: /
     ports:
       - "${ME_PORT:-8081}:8081"
     networks:
-      - esgimpact-net
-
-  # -------------------------------------------------------------------
-  # API .NET 8 (opcional — perfil `api`)
-  # Sem o perfil, o backend roda pelo Visual Studio / `dotnet run`
-  # apontando para localhost:27017.
-  # -------------------------------------------------------------------
-  esgimpact-api:
-    profiles: ["api"]
-    build:
-      context: .
-      dockerfile: src/ESGImpact.Api/Dockerfile
-    image: esgimpact-api:mongo
-    container_name: esgimpact-api
-    restart: unless-stopped
-    depends_on:
-      esgimpact-mongo:
-        condition: service_healthy
-    environment:
-      ASPNETCORE_ENVIRONMENT: Development
-      ASPNETCORE_URLS: http://+:8080
-      MongoDb__ConnectionString: mongodb://${MONGO_ROOT_USER:-esgadmin}:${MONGO_ROOT_PASSWORD:-Esg@Mongo2026}@esgimpact-mongo:27017/?authSource=admin
-      MongoDb__Database: ${MONGO_DATABASE:-esgimpact}
-      Jwt__Key: ${JWT_KEY:-esg-impact-super-secret-signing-key-change-me-2026!!}
-    ports:
-      - "${API_PORT:-8080}:8080"
-    networks:
-      - esgimpact-net
+      - backend
 
 volumes:
-  esgimpact-mongo-data:
-    name: esgimpact-mongo-data
-  esgimpact-mongo-config:
-    name: esgimpact-mongo-config
+  mongo-data:
+  mongo-config:
 
 networks:
-  esgimpact-net:
-    name: esgimpact-net
+  backend:
     driver: bridge

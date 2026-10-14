@@ -125,11 +125,26 @@ app.MapControllers();
 /* =====================================================================
  * 6) DIAGNÓSTICO
  * ===================================================================== */
+var startedAt = DateTime.UtcNow;
+
 app.MapGet("/api/health", async (MongoContext ctx, CancellationToken ct) =>
 {
     var ping = await ctx.Database.RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1), cancellationToken: ct);
     return Results.Ok(new { status = "ok", mongo = ping["ok"].ToDouble() == 1.0 ? "up" : "down" });
 });
+
+// Identifica o ambiente e a versão em execução — usado pelos smoke tests
+// do pipeline para confirmar que o deploy certo chegou ao ambiente certo.
+app.MapGet("/api/info", (IWebHostEnvironment env, MongoContext ctx) => Results.Ok(new
+{
+    application = "ESGImpact API",
+    environment = env.EnvironmentName,
+    version = builder.Configuration["APP_VERSION"] ?? "local",
+    commit = builder.Configuration["GIT_SHA"] ?? "local",
+    database = ctx.Database.DatabaseNamespace.DatabaseName,
+    startedAt,
+    uptimeSeconds = (long)(DateTime.UtcNow - startedAt).TotalSeconds
+}));
 
 app.MapGet("/api/collections/stats", async (MongoContext ctx, CancellationToken ct) =>
 {

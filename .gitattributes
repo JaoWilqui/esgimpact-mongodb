@@ -1,0 +1,13 @@
+# Finais de linha estaveis entre Windows (runner self-hosted) e Linux (CI)
+* text=auto
+*.sh   text eol=lf
+*.env  text eol=lf
+*.js   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+Dockerfile text eol=lf
+*.ps1  text eol=crlf
+*.sln  text eol=crlf
+*.docx binary
+*.pdf  binary
+*.png  binary

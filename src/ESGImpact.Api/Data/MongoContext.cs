@@ -20,7 +20,16 @@ public class MongoContext
     public MongoContext(IOptions<MongoSettings> options)
     {
         var settings = options.Value;
-        var client = new MongoClient(settings.ConnectionString);
+        var url = new MongoUrlBuilder(settings.ConnectionString);
+
+        if (!string.IsNullOrWhiteSpace(settings.Username))
+        {
+            url.Username = settings.Username;
+            url.Password = settings.Password;
+            url.AuthenticationSource = settings.AuthenticationSource;
+        }
+
+        var client = new MongoClient(url.ToMongoUrl());
         Database = client.GetDatabase(settings.Database);
     }
 

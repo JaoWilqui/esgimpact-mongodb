@@ -3,3 +3,6 @@ obj/
 .vs/
 .env
 *.user
+TestResults/
+*.trx
+coverage/

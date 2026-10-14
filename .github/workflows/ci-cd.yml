@@ -1,0 +1,262 @@
+# =====================================================================
+# ESGImpact - Pipeline CI/CD
+# ---------------------------------------------------------------------
+#  1. build-test        : restore, build, testes de unidade e de
+#                         integracao (MongoDB real) e validacao dos
+#                         scripts NoSQL                    [GitHub-hosted]
+#  2. docker            : build da imagem e publicacao no GHCR
+#                                                          [GitHub-hosted]
+#  3. deploy-staging    : docker compose + smoke tests     [self-hosted]
+#  4. deploy-production : mesma imagem, apos aprovacao     [self-hosted]
+#
+#  Pull requests executam apenas a etapa 1 (integracao continua).
+# =====================================================================
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['docs/**', '**/*.md']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  IMAGE_NAME: esgimpact-api
+
+jobs:
+  # -------------------------------------------------------------------
+  # 1) BUILD + TESTES
+  # -------------------------------------------------------------------
+  build-test:
+    name: Build e testes
+    runs-on: ubuntu-latest
+
+    services:
+      mongo:
+        image: mongo:7.0
+        env:
+          MONGO_INITDB_ROOT_USERNAME: esgadmin
+          MONGO_INITDB_ROOT_PASSWORD: Esg@Mongo2026
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1}).ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      MongoDb__ConnectionString: mongodb://localhost:27017
+      MongoDb__Username: esgadmin
+      MongoDb__Password: Esg@Mongo2026
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore ESGImpact.Mongo.sln
+
+      - name: Build (Release)
+        run: dotnet build ESGImpact.Mongo.sln -c Release --no-restore
+
+      - name: Testes de unidade
+        run: >-
+          dotnet test tests/ESGImpact.Tests -c Release --no-build
+          --filter "Category=Unit"
+          --logger "trx;LogFileName=unit.trx"
+          --logger "console;verbosity=normal"
+          --results-directory TestResults
+          --collect "XPlat Code Coverage"
+
+      - name: Testes de integracao (API + MongoDB)
+        run: >-
+          dotnet test tests/ESGImpact.Tests -c Release --no-build
+          --filter "Category=Integration"
+          --logger "trx;LogFileName=integration.trx"
+          --logger "console;verbosity=normal"
+          --results-directory TestResults
+
+      - name: Validar scripts NoSQL (carga inicial + CRUD)
+        env:
+          MONGO_CID: ${{ job.services.mongo.id }}
+        run: |
+          set -euo pipefail
+          docker cp mongo "$MONGO_CID":/scripts
+          run() { docker exec "$MONGO_CID" mongosh --quiet -u esgadmin -p 'Esg@Mongo2026' --authenticationDatabase admin "$@"; }
+          for f in /scripts/init/*.js; do echo "::group::$f"; run "$f"; echo "::endgroup::"; done
+          total=$(run --eval "const d=db.getSiblingDB('esgimpact'); ['emission_factors','simulations','participants','offset_projects','governance_audits'].reduce((a,c)=>a+d.getCollection(c).countDocuments(),0)")
+          echo "documentos carregados: $total"
+          test "$total" -ge 60
+          for f in /scripts/crud/*.js; do echo "::group::$f"; run "$f"; echo "::endgroup::"; done
+          echo "### Scripts NoSQL validados - $total documentos na carga inicial" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Resumo dos testes
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import glob, xml.etree.ElementTree as ET
+          ns = {'t': 'http://microsoft.com/schemas/VisualStudio/TeamTest/2010'}
+          print('### Testes automatizados\n\n| Suite | Total | Passou | Falhou |\n|---|---|---|---|')
+          for f in sorted(glob.glob('TestResults/*.trx')):
+              c = ET.parse(f).getroot().find('t:ResultSummary/t:Counters', ns)
+              print(f"| {f.split('/')[-1][:-4]} | {c.get('total')} | {c.get('passed')} | {c.get('failed')} |")
+          PY
+
+      - name: Publicar resultados dos testes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults/
+          retention-days: 14
+
+  # -------------------------------------------------------------------
+  # 2) IMAGEM DOCKER -> GHCR
+  # -------------------------------------------------------------------
+  docker:
+    name: Build e push da imagem
+    needs: build-test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Metadados da imagem
+        id: meta
+        run: |
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          short_sha=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "repo=ghcr.io/$owner/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/$owner/${IMAGE_NAME}:sha-$short_sha" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+          echo "version=1.0.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login no GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build e push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          build-args: |
+            APP_VERSION=${{ steps.meta.outputs.version }}
+            GIT_SHA=${{ steps.meta.outputs.short_sha }}
+          tags: |
+            ${{ steps.meta.outputs.image }}
+            ${{ steps.meta.outputs.repo }}:${{ steps.meta.outputs.version }}
+            ${{ steps.meta.outputs.repo }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Resumo
+        run: |
+          {
+            echo "### Imagem publicada"
+            echo
+            echo "| Tag | Valor |"; echo "|---|---|"
+            echo "| imutavel | \`${{ steps.meta.outputs.image }}\` |"
+            echo "| versao | \`${{ steps.meta.outputs.repo }}:${{ steps.meta.outputs.version }}\` |"
+            echo "| latest | \`${{ steps.meta.outputs.repo }}:latest\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # -------------------------------------------------------------------
+  # 3) DEPLOY EM STAGING (runner self-hosted, Docker Desktop)
+  # -------------------------------------------------------------------
+  deploy-staging:
+    name: Deploy staging
+    needs: docker
+    runs-on: [self-hosted, Windows]
+    environment:
+      name: staging
+      url: http://localhost:9081/swagger
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+    env:
+      API_IMAGE: ${{ needs.docker.outputs.image }}
+      GIT_SHA: ${{ needs.docker.outputs.short_sha }}
+      MONGO_ROOT_PASSWORD: ${{ secrets.MONGO_ROOT_PASSWORD }}
+      JWT_KEY: ${{ secrets.JWT_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login no GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Deploy + smoke tests
+        shell: powershell
+        run: |
+          if (-not $env:MONGO_ROOT_PASSWORD) { Write-Host '::warning::Segredo MONGO_ROOT_PASSWORD ausente no environment staging - usando valor padrao de desenvolvimento.'; $env:MONGO_ROOT_PASSWORD = 'Esg@Mongo2026' }
+          if (-not $env:JWT_KEY) { Write-Host '::warning::Segredo JWT_KEY ausente no environment staging - usando valor padrao de desenvolvimento.'; $env:JWT_KEY = 'esg-impact-staging-signing-key-change-me-2026!!' }
+          powershell -NoProfile -ExecutionPolicy Bypass -File deploy\deploy.ps1 -Environment staging
+          exit $LASTEXITCODE
+
+  # -------------------------------------------------------------------
+  # 4) DEPLOY EM PRODUCAO (mesma imagem, apos aprovacao manual)
+  # -------------------------------------------------------------------
+  deploy-production:
+    name: Deploy producao
+    needs: [docker, deploy-staging]
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Windows]
+    environment:
+      name: production
+      url: http://localhost:9080/swagger
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    env:
+      API_IMAGE: ${{ needs.docker.outputs.image }}
+      GIT_SHA: ${{ needs.docker.outputs.short_sha }}
+      MONGO_ROOT_PASSWORD: ${{ secrets.MONGO_ROOT_PASSWORD }}
+      JWT_KEY: ${{ secrets.JWT_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login no GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Deploy + smoke tests
+        shell: powershell
+        run: |
+          if (-not $env:MONGO_ROOT_PASSWORD) { Write-Host '::warning::Segredo MONGO_ROOT_PASSWORD ausente no environment production - usando valor padrao de desenvolvimento.'; $env:MONGO_ROOT_PASSWORD = 'Esg@Mongo2026' }
+          if (-not $env:JWT_KEY) { Write-Host '::warning::Segredo JWT_KEY ausente no environment production - usando valor padrao de desenvolvimento.'; $env:JWT_KEY = 'esg-impact-production-signing-key-change-me-2026!!' }
+          powershell -NoProfile -ExecutionPolicy Bypass -File deploy\deploy.ps1 -Environment production
+          exit $LASTEXITCODE

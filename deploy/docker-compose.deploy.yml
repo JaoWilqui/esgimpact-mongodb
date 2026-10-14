@@ -1,0 +1,86 @@
+# =====================================================================
+# ESGImpact — orquestração dos ambientes STAGING e PRODUÇÃO
+# ---------------------------------------------------------------------
+# Mesmo arquivo para os dois ambientes; o que muda vem do env file
+# (deploy/staging.env ou deploy/production.env) e dos segredos
+# injetados pelo pipeline. Cada ambiente roda como um projeto Compose
+# separado (-p esgimpact-staging / -p esgimpact-production), então
+# containers, rede e volumes ficam isolados entre si.
+#
+# Uso (o pipeline faz isso por meio de deploy/deploy.ps1):
+#   docker compose -p esgimpact-staging \
+#     --env-file deploy/staging.env -f deploy/docker-compose.deploy.yml up -d
+# =====================================================================
+
+services:
+  api:
+    image: "${API_IMAGE:?defina API_IMAGE, por exemplo ghcr.io/usuario/esgimpact-api:sha-abc1234}"
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+      MongoDb__ConnectionString: mongodb://mongo:27017
+      MongoDb__Database: ${MONGO_DATABASE}
+      MongoDb__Username: ${MONGO_ROOT_USER}
+      MongoDb__Password: ${MONGO_ROOT_PASSWORD:?segredo MONGO_ROOT_PASSWORD não informado}
+      Jwt__Key: ${JWT_KEY:?segredo JWT_KEY não informado}
+      Jwt__ExpiryMinutes: ${JWT_EXPIRY_MINUTES:-60}
+    ports:
+      - "${API_PORT}:8080"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "${API_CPUS:-1.0}"
+          memory: ${API_MEMORY:-512M}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  mongo:
+    image: mongo:7.0
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE}
+    # porta do banco NÃO é publicada: só a API, na mesma rede, acessa
+    volumes:
+      - mongo-data:/data/db
+      - mongo-config:/data/configdb
+      - ../mongo/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - backend
+    healthcheck:
+      # conecta pelo hostname (e nao por localhost): durante a carga inicial o
+      # mongod temporario so escuta em 127.0.0.1, entao o banco so fica
+      # "healthy" depois que todos os scripts de mongo/init terminaram.
+      test: ["CMD-SHELL", "mongosh --quiet --host \"$$(hostname)\" --eval \"db.adminCommand('ping').ok\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  mongo-data:
+  mongo-config:
+
+networks:
+  backend:
+    driver: bridge
