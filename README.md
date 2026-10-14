@@ -6,7 +6,7 @@ testa, empacota e implanta automaticamente em **staging** e **produção**.
 
 | | |
 |---|---|
-| Integrante | **NOME COMPLETO — RM 000000** |
+| Integrante | **João Antonio Soares dos Passos — RM 564710** |
 | Disciplina | Navegando pelo mundo DevOps — FIAP |
 | Repositório | https://github.com/JaoWilqui/esgimpact-mongodb |
 | Imagem | `ghcr.io/jaowilqui/esgimpact-api` |
