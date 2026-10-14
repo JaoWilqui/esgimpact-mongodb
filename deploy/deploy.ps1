@@ -24,7 +24,10 @@ param(
     [ValidateSet('staging', 'production')]
     [string]$Environment,
 
-    [string]$ExpectedCommit = $env:GIT_SHA
+    [string]$ExpectedCommit = $env:GIT_SHA,
+
+    # usa valores de desenvolvimento quando o environment do GitHub nao tem segredos
+    [switch]$UseDevDefaults
 )
 
 $ErrorActionPreference = 'Stop'
@@ -35,6 +38,14 @@ $envFile     = Join-Path $root "deploy\$Environment.env"
 $project     = "esgimpact-$Environment"
 
 if (-not $env:API_IMAGE) { throw 'Variavel API_IMAGE nao definida.' }
+if ($UseDevDefaults -and -not $env:MONGO_ROOT_PASSWORD) {
+    Write-Host "::warning::Segredo MONGO_ROOT_PASSWORD ausente no environment $Environment - usando valor padrao de desenvolvimento."
+    $env:MONGO_ROOT_PASSWORD = 'Esg@Mongo2026'
+}
+if ($UseDevDefaults -and -not $env:JWT_KEY) {
+    Write-Host "::warning::Segredo JWT_KEY ausente no environment $Environment - usando valor padrao de desenvolvimento."
+    $env:JWT_KEY = "esg-impact-$Environment-signing-key-change-me-2026!!"
+}
 if (-not $env:MONGO_ROOT_PASSWORD) { throw 'Segredo MONGO_ROOT_PASSWORD nao definido.' }
 if (-not $env:JWT_KEY) { throw 'Segredo JWT_KEY nao definido.' }
 

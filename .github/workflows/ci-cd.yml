@@ -216,12 +216,10 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Deploy + smoke tests
-        shell: powershell
-        run: |
-          if (-not $env:MONGO_ROOT_PASSWORD) { Write-Host '::warning::Segredo MONGO_ROOT_PASSWORD ausente no environment staging - usando valor padrao de desenvolvimento.'; $env:MONGO_ROOT_PASSWORD = 'Esg@Mongo2026' }
-          if (-not $env:JWT_KEY) { Write-Host '::warning::Segredo JWT_KEY ausente no environment staging - usando valor padrao de desenvolvimento.'; $env:JWT_KEY = 'esg-impact-staging-signing-key-change-me-2026!!' }
-          powershell -NoProfile -ExecutionPolicy Bypass -File deploy\deploy.ps1 -Environment staging
-          exit $LASTEXITCODE
+        # cmd evita a ExecutionPolicy do Windows PowerShell da maquina; o script
+        # e chamado com -ExecutionPolicy Bypass apenas para este processo
+        shell: cmd
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File deploy\deploy.ps1 -Environment staging -UseDevDefaults
 
   # -------------------------------------------------------------------
   # 4) DEPLOY EM PRODUCAO (mesma imagem, apos aprovacao manual)
@@ -254,9 +252,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Deploy + smoke tests
-        shell: powershell
-        run: |
-          if (-not $env:MONGO_ROOT_PASSWORD) { Write-Host '::warning::Segredo MONGO_ROOT_PASSWORD ausente no environment production - usando valor padrao de desenvolvimento.'; $env:MONGO_ROOT_PASSWORD = 'Esg@Mongo2026' }
-          if (-not $env:JWT_KEY) { Write-Host '::warning::Segredo JWT_KEY ausente no environment production - usando valor padrao de desenvolvimento.'; $env:JWT_KEY = 'esg-impact-production-signing-key-change-me-2026!!' }
-          powershell -NoProfile -ExecutionPolicy Bypass -File deploy\deploy.ps1 -Environment production
-          exit $LASTEXITCODE
+        # cmd evita a ExecutionPolicy do Windows PowerShell da maquina; o script
+        # e chamado com -ExecutionPolicy Bypass apenas para este processo
+        shell: cmd
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File deploy\deploy.ps1 -Environment production -UseDevDefaults
