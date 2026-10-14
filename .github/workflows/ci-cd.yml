@@ -97,11 +97,11 @@ jobs:
           set -euo pipefail
           docker cp mongo "$MONGO_CID":/scripts
           run() { docker exec "$MONGO_CID" mongosh --quiet -u esgadmin -p 'Esg@Mongo2026' --authenticationDatabase admin "$@"; }
-          for f in /scripts/init/*.js; do echo "::group::$f"; run "$f"; echo "::endgroup::"; done
+          for f in mongo/init/*.js; do echo "::group::$f"; run "/scripts/${f#mongo/}"; echo "::endgroup::"; done
           total=$(run --eval "const d=db.getSiblingDB('esgimpact'); ['emission_factors','simulations','participants','offset_projects','governance_audits'].reduce((a,c)=>a+d.getCollection(c).countDocuments(),0)")
           echo "documentos carregados: $total"
           test "$total" -ge 60
-          for f in /scripts/crud/*.js; do echo "::group::$f"; run "$f"; echo "::endgroup::"; done
+          for f in mongo/crud/*.js; do echo "::group::$f"; run "/scripts/${f#mongo/}"; echo "::endgroup::"; done
           echo "### Scripts NoSQL validados - $total documentos na carga inicial" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Resumo dos testes
