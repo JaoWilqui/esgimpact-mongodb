@@ -1,0 +1,224 @@
+### =====================================================================
+### ESGImpact API — MongoDB | roteiro completo de chamadas
+### Ajuste @host conforme a execução (Docker: 8080 | dotnet run: 5xxx)
+### =====================================================================
+@host = http://localhost:8080
+@contentType = application/json
+
+### 0) Saúde da conexão com o MongoDB
+GET {{host}}/api/health
+
+### 0.1) Contagem de documentos das 5 collections
+GET {{host}}/api/collections/stats
+
+### 1) LOGIN — devolve o JWT (participante com credentials embutidas)
+# @name login
+POST {{host}}/api/auth/login
+Content-Type: {{contentType}}
+
+{
+  "username": "analista",
+  "password": "Esg@2026"
+}
+
+### guarda o token da resposta anterior
+@token = {{login.response.body.accessToken}}
+
+### =====================================================================
+### CRUD — collection 1: emission_factors  (E)
+### =====================================================================
+
+### CREATE
+POST {{host}}/api/emission-factors
+Content-Type: {{contentType}}
+
+{
+  "code": "TREM_REGIONAL",
+  "activity": "Trem regional",
+  "factorKgCo2PerUnit": 0.041,
+  "unit": "km",
+  "fieldLabel": "Quilômetros percorridos",
+  "category": "transporte",
+  "pillar": "E",
+  "isActive": true,
+  "source": { "agency": "ANTT", "year": 2026, "methodology": "tank-to-wheel" }
+}
+
+### READ — lista filtrada (filtro é um JSON do próprio MongoDB)
+GET {{host}}/api/emission-factors?page=1&pageSize=5&sort=factorKgCo2PerUnit&desc=true&filter={"category":"transporte","isActive":true}
+
+### READ — por código de negócio
+GET {{host}}/api/emission-factors/CARRO
+
+### UPDATE parcial ($set) — campos não enviados são preservados
+PATCH {{host}}/api/emission-factors/TREM_REGIONAL
+Content-Type: {{contentType}}
+
+{
+  "factorKgCo2PerUnit": 0.038,
+  "review": { "status": "revisado", "reviewer": "ANL-001" }
+}
+
+### DELETE
+DELETE {{host}}/api/emission-factors/TREM_REGIONAL
+
+### =====================================================================
+### CRUD — collection 2: simulations  (E)
+### =====================================================================
+
+### CREATE via serviço de domínio (calcula, classifica e persiste)
+POST {{host}}/api/simulations
+Content-Type: {{contentType}}
+
+{
+  "activity": "CARRO",
+  "value": 85,
+  "ownerCode": "CID-003",
+  "source": "api"
+}
+
+### READ — histórico paginado
+GET {{host}}/api/simulations?page=1&pageSize=5&ownerCode=CID-003
+
+### READ — documento cru, com todos os campos flexíveis
+GET {{host}}/api/simulation-documents?page=1&pageSize=3&sort=createdAt&desc=true&filter={"source":"iot"}
+
+### UPDATE parcial
+PATCH {{host}}/api/simulation-documents/000000000000000000000000
+Content-Type: {{contentType}}
+
+{
+  "tags": ["revisado-manualmente"]
+}
+
+### =====================================================================
+### CRUD — collection 3: participants  (S)
+### =====================================================================
+
+### CREATE — cidadão
+POST {{host}}/api/participants
+Content-Type: {{contentType}}
+
+{
+  "code": "CID-008",
+  "type": "cidadao",
+  "name": "Helena Duarte",
+  "district": "Vila Mariana",
+  "city": "São Paulo",
+  "engagement": { "level": "bronze", "points": 0, "streakDays": 0 },
+  "consent": { "lgpdAccepted": true, "shareAnonymizedData": true }
+}
+
+### CREATE em lote — organização com estrutura diferente na MESMA collection
+POST {{host}}/api/participants/bulk
+Content-Type: {{contentType}}
+
+[
+  {
+    "code": "ORG-004",
+    "type": "organizacao",
+    "name": "Bike Express Entregas",
+    "cnpj": "11.222.333/0001-44",
+    "sector": "logistica",
+    "employees": 54,
+    "corporateGoals": [{ "metric": "tonCo2Ano", "target": 9, "baseline": 21 }]
+  }
+]
+
+### READ — só organizações
+GET {{host}}/api/participants?filter={"type":"organizacao"}
+
+### UPDATE — gamificação
+PATCH {{host}}/api/participants/CID-008
+Content-Type: {{contentType}}
+
+{
+  "engagement": { "level": "prata", "points": 620, "streakDays": 7 }
+}
+
+### DELETE
+DELETE {{host}}/api/participants/CID-008
+
+### =====================================================================
+### CRUD — collection 4: offset_projects  (E + S)
+### =====================================================================
+
+### CREATE
+POST {{host}}/api/offset-projects
+Content-Type: {{contentType}}
+
+{
+  "code": "PRJ-013",
+  "name": "Hortas Urbanas em Terrenos Ociosos",
+  "type": "agricultura_urbana",
+  "status": "piloto",
+  "capacityTonCo2Year": 42,
+  "pricing": [{ "currency": "BRL", "pricePerTon": 135.0 }],
+  "urbanFarming": { "plots": 18, "areaM2": 7400 },
+  "socialImpact": { "familiesSupplied": 260, "jobsCreated": 14 },
+  "sdgTargets": [2, 11, 13]
+}
+
+### READ — projetos ativos cotados em USD
+GET {{host}}/api/offset-projects?filter={"status":"ativo","pricing.currency":"USD"}&sort=capacityTonCo2Year&desc=true
+
+### UPDATE
+PATCH {{host}}/api/offset-projects/PRJ-013
+Content-Type: {{contentType}}
+
+{
+  "status": "ativo",
+  "certifications": ["Gold Standard"]
+}
+
+### DELETE
+DELETE {{host}}/api/offset-projects/PRJ-013
+
+### =====================================================================
+### CRUD — collection 5: governance_audits  (G)  — exige JWT
+### =====================================================================
+
+### CREATE
+POST {{host}}/api/governance-audits
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "eventType": "policy_review",
+  "occurredAt": { "$date": "2026-09-01T12:00:00Z" },
+  "actor": { "participantCode": "ANL-001", "name": "Ana Lúcia Ferreira", "role": "Analyst" },
+  "resource": { "collection": "participants", "documentCode": "ORG-002" },
+  "checklist": [
+    { "item": "Programa social documentado", "status": "ok" },
+    { "item": "Meta com linha de base", "status": "pendente" }
+  ],
+  "compliance": { "framework": "GRI 305", "status": "parcial" }
+}
+
+### READ — trilha do fator CARRO
+GET {{host}}/api/governance-audits?filter={"resource.documentCode":"CARRO"}&sort=occurredAt&desc=true
+Authorization: Bearer {{token}}
+
+### READ — eventos LGPD
+GET {{host}}/api/governance-audits?filter={"compliance.framework":"LGPD"}
+Authorization: Bearer {{token}}
+
+### =====================================================================
+### Endpoints analíticos (Aggregation Framework)
+### =====================================================================
+
+### Dashboard ESG
+GET {{host}}/api/analytics/dashboard?trendDays=30
+Authorization: Bearer {{token}}
+
+### Recomendações com economia quantificada
+GET {{host}}/api/recommendations
+
+### Cotação de compensação nos projetos reais
+POST {{host}}/api/offset/quote
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "currency": "BRL"
+}
